@@ -1,0 +1,22 @@
+---
+- name: Update packages on all Ubuntu servers
+  hosts: ubuntu_servers
+  become: true
+  serial: 1
+  tasks:
+    - name: Refresh apt cache and upgrade packages
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        upgrade: dist
+        autoclean: true
+
+    - name: Check whether a reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Report servers that need a reboot
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} needs a reboot"
+      when: reboot_flag.stat.exists
