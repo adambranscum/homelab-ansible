@@ -1,0 +1,11 @@
+# keys and secrets, never commit these
+*.pem
+*.key
+ansible_key*
+github_ansible*
+id_*
+.env
+vault_pass*
+*.vault_pass
+# ansible noise
+*.retry
