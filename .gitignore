@@ -10,3 +10,5 @@ vault_pass*
 # ansible noise
 *.retry
 logs/
+*.env
+kuma-push-url

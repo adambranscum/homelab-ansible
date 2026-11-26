@@ -1,0 +1,80 @@
+---
+- name: Samba on konoha
+  hosts: konoha
+  become: true
+  tasks:
+    - name: Install Samba
+      ansible.builtin.apt:
+        name: samba
+        state: present
+        update_cache: true
+
+    - name: Create the Samba-only account for the second user
+      ansible.builtin.user:
+        name: sbranscum
+        shell: /usr/sbin/nologin
+        create_home: false
+        password_lock: true
+
+    - name: Write smb.conf
+      ansible.builtin.copy:
+        dest: /etc/samba/smb.conf
+        owner: root
+        group: root
+        mode: "0644"
+        validate: testparm -s %s
+        content: |
+          [global]
+             server string = konoha
+             workgroup = Branscum
+             disable netbios = yes
+             smb ports = 445
+             server min protocol = SMB3
+             map to guest = never
+             hosts allow = 127.0.0.1 192.168.1.0/24 192.168.10.0/24
+             hosts deny = ALL
+             load printers = no
+             printing = bsd
+             printcap name = /dev/null
+             disable spoolss = yes
+             log file = /var/log/samba/log.%m
+             max log size = 1000
+
+          [documents]
+             path = /files/documents
+             valid users = abranscum sbranscum
+             force user = abranscum
+             force group = abranscum
+             read only = no
+             create mask = 0664
+             directory mask = 0775
+
+          [files]
+             path = /files/files
+             valid users = abranscum sbranscum
+             force user = abranscum
+             force group = abranscum
+             read only = no
+             create mask = 0664
+             directory mask = 0775
+
+          [recipes]
+             path = /files/recipes
+             valid users = abranscum sbranscum
+             force user = abranscum
+             force group = abranscum
+             read only = no
+             create mask = 0664
+             directory mask = 0775
+
+    - name: Turn off nmbd (NetBIOS is not needed)
+      ansible.builtin.systemd:
+        name: nmbd
+        enabled: false
+        state: stopped
+
+    - name: Enable and restart smbd
+      ansible.builtin.systemd:
+        name: smbd
+        enabled: true
+        state: restarted

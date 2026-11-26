@@ -1,0 +1,137 @@
+backup_hosts:
+  akina:
+    enabled: true
+    ownership_paths:
+    - /var/lib/pterodactyl
+    - /etc/pterodactyl
+    db_dumps:
+    - name: pterodactyl
+      container: hiroshi
+      cmd: D=$(command -v mariadb-dump || command -v mysqldump); exec "$D" -u"$MYSQL_USER"
+        -p"$MYSQL_PASSWORD" --single-transaction --no-tablespaces "$MYSQL_DATABASE"
+    pulls:
+    - name: compose
+      src: /home/abranscum/docker/akina/
+      opts:
+      - --exclude=/takumi/database/
+    - name: etc-pterodactyl
+      src: /etc/pterodactyl/
+    - name: var-lib-pterodactyl
+      src: /var/lib/pterodactyl/
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  aincrad:
+    enabled: true
+    sqlite_roots:
+    - /home/abranscum/dockge
+    pulls:
+    - name: dockge
+      src: /home/abranscum/dockge/
+    - name: palworld
+      src: /home/abranscum/games/palworld/
+      opts:
+      - --max-size=200M
+    - name: playit
+      src: /home/abranscum/games/argo-the-rat/
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  jarvis:
+    enabled: true
+    sqlite_roots:
+    - /home/abranscum/homeassistant
+    - /home/abranscum/matter
+    - /home/abranscum/mosquitto
+    - /home/abranscum/frigate
+    sqlite_skip:
+    - home-assistant_v2.db
+    pulls:
+    - name: homeassistant
+      src: /home/abranscum/homeassistant/
+      opts:
+      - --max-size=100M
+    - name: matter
+      src: /home/abranscum/matter/
+      opts:
+      - --max-size=100M
+    - name: mosquitto
+      src: /home/abranscum/mosquitto/
+      opts:
+      - --max-size=100M
+    - name: frigate
+      src: /home/abranscum/frigate/
+      opts:
+      - --exclude=/media/
+      - --exclude=/storage/
+      - --exclude=*.mp4
+      - --exclude=*.m3u8
+      - --exclude=*.ts
+      - --max-size=100M
+    - name: ollama
+      src: /home/abranscum/ollama/
+      opts:
+      - --max-size=50M
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  kusanagi:
+    enabled: true
+    pulls:
+    - name: docker
+      src: /home/abranscum/docker/kusanagi/
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  amestris:
+    enabled: true
+    sqlite_roots:
+    - /home/abranscum/docker/amestris
+    pulls:
+    - name: docker
+      src: /home/abranscum/docker/amestris/
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  ua-high:
+    enabled: true
+    db_dumps:
+    - name: nextcloud-db
+      container: allmight
+      cmd: mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --single-transaction --routines nextcloud
+    - name: immich-db
+      container: todoroki
+      cmd: pg_dumpall --clean --if-exists --username=postgres
+    pulls:
+    - name: docker
+      src: /home/abranscum/docker/
+      opts:
+      - --exclude=/nextcloud/allmight/data/
+      - --exclude=/immich/todoroki/data/
+      - --include=/nextcloud/deku/html/config/
+      - --include=/nextcloud/deku/html/config/**
+      - --exclude=/nextcloud/deku/html/*
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  konoha:
+    enabled: true
+    sqlite_roots:
+    - /home/abranscum/docker/konoha
+    pulls:
+    - name: arr-stack
+      src: /home/abranscum/docker/konoha/
+    - name: kopia
+      src: /home/abranscum/docker/kopia/
+      opts:
+      - --exclude=/cache/
+      - --exclude=/logs/
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/
+  sybil:
+    enabled: true
+    sqlite_roots:
+    - /home/abranscum/docker/sybil
+    pulls:
+    - name: docker
+      src: /home/abranscum/docker/sybil/
+      opts:
+      - --exclude=/stacks/scrutiny/influxdb/
+    - name: ansible
+      src: /home/abranscum/ansible/
+    - name: db-and-metadata
+      src: /var/backups/ansible-backup/

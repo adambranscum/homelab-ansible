@@ -1,0 +1,163 @@
+---
+- name: Prepare backups on each host
+  hosts: ubuntu_servers
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/backup_hosts.yml
+  vars:
+    bh: "{{ backup_hosts.get(inventory_hostname, {}) }}"
+    meta_dir: /var/backups/ansible-backup
+    own: "{{ bh.ownership_paths | default(bh.pulls | default([]) | map(attribute='src') | reject('equalto', meta_dir ~ '/') | list) }}"
+  tasks:
+    - name: Skip hosts that are not enabled
+      ansible.builtin.meta: end_host
+      when: not (bh.enabled | default(false))
+
+    - name: Create private metadata folder
+      ansible.builtin.file:
+        path: "{{ meta_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Dump databases
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        docker exec {{ item.container }} sh -c {{ item.cmd | quote }} > {{ meta_dir }}/{{ item.name }}.sql.tmp
+        && test -s {{ meta_dir }}/{{ item.name }}.sql.tmp
+        && mv {{ meta_dir }}/{{ item.name }}.sql.tmp {{ meta_dir }}/{{ item.name }}.sql
+      args:
+        executable: /bin/bash
+      loop: "{{ bh.db_dumps | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Install sqlite3
+      ansible.builtin.apt:
+        name: sqlite3
+        state: present
+      when: bh.sqlite_roots is defined
+
+    - name: Hot-copy SQLite databases
+      ansible.builtin.shell: |
+        set -eu -o pipefail
+        out={{ meta_dir }}/sqlite
+        rm -rf "$out.new"; mkdir -p "$out.new"
+        for root in {{ bh.sqlite_roots | map('quote') | join(' ') }}; do
+          find "$root" -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \){% for s in bh.sqlite_skip | default([]) %} ! -name {{ s | quote }}{% endfor %} -print0
+        done | while IFS= read -r -d '' f; do
+          [ "$(head -c 15 "$f")" = "SQLite format 3" ] || continue
+          dest="$out.new/$(printf '%s' "${f#/}" | tr '/' '_')"
+          sqlite3 "$f" ".timeout 15000" ".backup '$dest'"
+        done
+        rm -rf "$out"; mv "$out.new" "$out"
+      args:
+        executable: /bin/bash
+      when: bh.sqlite_roots is defined
+
+    - name: Record file ownership
+      ansible.builtin.shell: >-
+        find {{ own | map('quote') | join(' ') }} -printf '%u:%g %m %p\n' > {{ meta_dir }}/ownership.txt
+
+    - name: Mark host as prepared
+      ansible.builtin.set_fact:
+        backup_ok: true
+
+- name: Pull to sybil and push to konoha
+  hosts: sybil
+  become: false
+  gather_facts: false
+  vars_files:
+    - ../vars/backup_hosts.yml
+  vars:
+    staging: /home/abranscum/backup-staging
+    meta_dir: /var/backups/ansible-backup
+    dest_host: "{{ hostvars['konoha'].ansible_host | default('konoha') }}"
+    ssh_key: "{{ lookup('ansible.builtin.config', 'DEFAULT_PRIVATE_KEY_FILE') | default('', true) }}"
+    ssh_cmd: "ssh {{ ('-i ' ~ ssh_key ~ ' ') if ssh_key else '' }}-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    want: "{{ backup_hosts | dict2items | selectattr('value.enabled', 'defined') | selectattr('value.enabled') | map(attribute='key') | list }}"
+    dbx:
+      - --exclude=*.db
+      - --exclude=*.db-wal
+      - --exclude=*.db-shm
+      - --exclude=*.db-journal
+      - --exclude=*.sqlite
+      - --exclude=*.sqlite-wal
+      - --exclude=*.sqlite-shm
+      - --exclude=*.sqlite3
+      - --exclude=*.sqlite3-wal
+      - --exclude=*.sqlite3-shm
+  tasks:
+    - name: Work out which hosts were prepared
+      ansible.builtin.set_fact:
+        todo: >-
+          {%- set r = [] -%}
+          {%- for h in want -%}
+          {%- if hostvars[h].backup_ok | default(false) -%}{%- set _ = r.append(h) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ r }}
+
+    - name: Build the pull list
+      ansible.builtin.set_fact:
+        pulls: >-
+          {%- set out = [] -%}
+          {%- for h in todo -%}
+          {%- for p in backup_hosts[h].pulls -%}
+          {%- set _ = out.append({'host': h, 'name': p.name, 'src': p.src, 'opts': p.opts | default([]), 'sqlite': backup_hosts[h].sqlite_roots is defined}) -%}
+          {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Create staging folders
+      ansible.builtin.file:
+        path: "{{ staging }}/{{ item.host }}/{{ item.name }}"
+        state: directory
+        mode: "0750"
+      loop: "{{ pulls }}"
+      loop_control:
+        label: "{{ item.host }}/{{ item.name }}"
+
+    - name: Create destination folders on konoha
+      ansible.builtin.file:
+        path: "/files/server-backups/{{ item }}"
+        state: directory
+        mode: "0750"
+      delegate_to: konoha
+      loop: "{{ todo }}"
+
+    - name: Pull from hosts
+      ansible.builtin.command:
+        argv: >-
+          {{ ['rsync','-a','--delete','--delete-excluded']
+          + (['--chown=abranscum:abranscum'] if item.host == inventory_hostname else ['-e', ssh_cmd, '--rsync-path=sudo rsync'])
+          + (dbx if (item.sqlite and item.src != meta_dir ~ '/') else [])
+          + item.opts
+          + [ (item.src if item.host == inventory_hostname else ((hostvars[item.host].ansible_user | default('abranscum')) ~ '@' ~ (hostvars[item.host].ansible_host | default(item.host)) ~ ':' ~ item.src)),
+              staging ~ '/' ~ item.host ~ '/' ~ item.name ~ '/' ] }}
+      become: "{{ item.host == inventory_hostname }}"
+      loop: "{{ pulls }}"
+      loop_control:
+        label: "{{ item.host }}/{{ item.name }}"
+      register: result
+      changed_when: false
+      failed_when: result.rc not in [0, 24]
+
+    - name: Stamp last run
+      ansible.builtin.copy:
+        content: "{{ lookup('pipe', 'date -Is') }}\n"
+        dest: "{{ staging }}/{{ item }}/last-run.txt"
+        mode: "0640"
+      loop: "{{ todo }}"
+
+    - name: Push to konoha
+      ansible.builtin.command:
+        argv: ['rsync', '-a', '--delete', '-e', "{{ ssh_cmd }}", "{{ staging }}/{{ item }}/", "abranscum@{{ dest_host }}:/files/server-backups/{{ item }}/"]
+      loop: "{{ todo }}"
+      changed_when: false
+
+    - name: Fail if an enabled host was not backed up
+      ansible.builtin.fail:
+        msg: "Not backed up: {{ want | difference(todo) }}"
+      when: (want | difference(todo)) | length > 0

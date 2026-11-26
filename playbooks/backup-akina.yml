@@ -1,0 +1,76 @@
+---
+- name: Prepare akina (DB dump and ownership list)
+  hosts: akina
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create root-only backup folder on akina
+      ansible.builtin.file:
+        path: /var/backups/ansible-backup
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Dump Pterodactyl MariaDB (password stays inside the container)
+      ansible.builtin.shell: |
+        set -e
+        docker exec hiroshi sh -c 'D=$(command -v mariadb-dump || command -v mysqldump); exec "$D" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --single-transaction --no-tablespaces "$MYSQL_DATABASE"' > pterodactyl.sql.tmp
+        test -s pterodactyl.sql.tmp
+        mv pterodactyl.sql.tmp pterodactyl.sql
+      args:
+        chdir: /var/backups/ansible-backup
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Save owner and mode list of Pterodactyl files
+      ansible.builtin.shell: |
+        find /var/lib/pterodactyl /etc/pterodactyl -printf '%u:%g %m %p\n' > ownership.txt
+      args:
+        chdir: /var/backups/ansible-backup
+        executable: /bin/bash
+      changed_when: true
+
+- name: Pull akina to staging on sybil, then push to konoha
+  hosts: sybil
+  gather_facts: false
+  vars:
+    akina_ip: "{{ hostvars['akina'].ansible_host }}"
+    konoha_ip: "{{ hostvars['konoha'].ansible_host }}"
+    staging: /home/abranscum/backup-staging/akina
+    ssh_cmd: "ssh -i /home/abranscum/.ssh/ansible_key -o BatchMode=yes"
+    pulls:
+      - { src: /home/abranscum/docker/akina/, dest: compose, excludes: ["--exclude=/takumi/database/"] }
+      - { src: /etc/pterodactyl/, dest: etc-pterodactyl, excludes: [] }
+      - { src: /var/lib/pterodactyl/, dest: var-lib-pterodactyl, excludes: [] }
+      - { src: /var/backups/ansible-backup/, dest: db-and-metadata, excludes: [] }
+  tasks:
+    - name: Create staging folders on sybil
+      ansible.builtin.file:
+        path: "{{ staging }}/{{ item.dest }}"
+        state: directory
+        mode: "0700"
+      loop: "{{ pulls }}"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: Pull from akina with rsync
+      ansible.builtin.command:
+        argv: "{{ ['rsync', '-a', '--delete'] + item.excludes + ['-e', ssh_cmd, '--rsync-path=sudo rsync', 'abranscum@' ~ akina_ip ~ ':' ~ item.src, staging ~ '/' ~ item.dest ~ '/'] }}"
+      loop: "{{ pulls }}"
+      loop_control:
+        label: "{{ item.dest }}"
+      register: pull
+      changed_when: true
+      failed_when: pull.rc not in [0, 24]
+
+    - name: Write a timestamp
+      ansible.builtin.copy:
+        content: "{{ lookup('pipe', 'date -Is') }}\n"
+        dest: "{{ staging }}/last-run.txt"
+        mode: "0600"
+
+    - name: Push staged copy to konoha
+      ansible.builtin.command:
+        argv: ['rsync', '-a', '--delete', '-e', "{{ ssh_cmd }}", "{{ staging }}/", "abranscum@{{ konoha_ip }}:/files/server-backups/akina/"]
+      changed_when: true
