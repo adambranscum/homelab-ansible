@@ -58,15 +58,6 @@
              create mask = 0664
              directory mask = 0775
 
-          [recipes]
-             path = /files/recipes
-             valid users = abranscum sbranscum
-             force user = abranscum
-             force group = abranscum
-             read only = no
-             create mask = 0664
-             directory mask = 0775
-
     - name: Turn off nmbd (NetBIOS is not needed)
       ansible.builtin.systemd:
         name: nmbd
