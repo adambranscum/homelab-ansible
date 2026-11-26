@@ -1,0 +1,20 @@
+---
+- name: Update sybil
+  hosts: localhost
+  connection: local
+  become: true
+  tasks:
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+
+    - name: Check whether a reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Report pending reboot
+      ansible.builtin.debug:
+        msg: "sybil needs a reboot to finish updates"
+      when: reboot_required.stat.exists
