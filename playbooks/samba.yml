@@ -16,6 +16,24 @@
         create_home: false
         password_lock: true
 
+    - name: User folders
+      ansible.builtin.file:
+        path: "/files/{{ item }}"
+        state: directory
+        owner: "{{ item }}"
+        group: abranscum
+        mode: "0770"
+      loop: [abranscum, sbranscum]
+
+    - name: User subfolders
+      ansible.builtin.file:
+        path: "/files/{{ item.0 }}/{{ item.1 }}"
+        state: directory
+        owner: "{{ item.0 }}"
+        group: abranscum
+        mode: "0770"
+      loop: "{{ ['abranscum', 'sbranscum'] | product(['downloads', 'documents', 'pictures', 'music', 'videos']) | list }}"
+
     - name: Write smb.conf
       ansible.builtin.copy:
         dest: /etc/samba/smb.conf
@@ -40,23 +58,43 @@
              log file = /var/log/samba/log.%m
              max log size = 1000
 
-          [documents]
-             path = /files/documents
-             valid users = abranscum sbranscum
+          [abranscum]
+             path = /files/abranscum
+             valid users = abranscum
              force user = abranscum
              force group = abranscum
              read only = no
-             create mask = 0664
-             directory mask = 0775
+             create mask = 0660
+             directory mask = 0770
 
-          [files]
-             path = /files/files
-             valid users = abranscum sbranscum
+          [sbranscum]
+             path = /files/sbranscum
+             valid users = sbranscum
+             force user = sbranscum
+             force group = abranscum
+             read only = no
+             create mask = 0660
+             directory mask = 0770
+
+          [nas]
+             path = /files
+             valid users = abranscum
              force user = abranscum
              force group = abranscum
              read only = no
              create mask = 0664
              directory mask = 0775
+             veto files = /lost+found/
+
+          [data]
+             path = /data
+             valid users = abranscum
+             force user = abranscum
+             force group = abranscum
+             read only = no
+             create mask = 0664
+             directory mask = 0775
+             veto files = /lost+found/
 
     - name: Turn off nmbd (NetBIOS is not needed)
       ansible.builtin.systemd:
